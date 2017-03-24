@@ -17,7 +17,7 @@
 
 
 /* Network setting */
-#define OSC_UDP false   // if false, uses SLIPSerial
+#define OSC_UDP true   // if false, uses SLIPSerial
 
 #include <Ethernet.h>
 #include <EthernetUdp.h>
@@ -25,9 +25,9 @@
 EthernetUDP udp;
 
 byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
-IPAddress myIP(10,0,3,225);
+IPAddress myIP(10,0,1,225);
 //IPAddress destAddress(10,0,2,128);
-IPAddress destIP(10,0,3,200);
+IPAddress destIP(10,0,1,200);
 const uint16_t destPort = 9003;
 
 enum ConnectMode {

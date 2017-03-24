@@ -1,6 +1,7 @@
 #include "settings.h"
 
-#include <Wire.h>
+//#include <Wire.h>
+#include <i2c_t3.h>
 #include <LIDARLite.h>
 #include <OSCMessage.h>
 
@@ -12,14 +13,14 @@
     SLIPEncodedSerial SLIPSerial(Serial1);
   #endif
 
-const int numLidar = 3;
+const int numLidar = 2;
 unsigned long biasCounter = 0;
 
 LIDARLite lidars[numLidar];
-uint8_t lidarAddr[] = {
-  0x63,   // DO NOT USE 0x62 -> it is default and it's easiest to leave it open to set other addresses
-  0x64,
-  0x65
+unsigned char lidarAddr[] = {
+  100,   // DO NOT USE 0x62 -> it is default and it's easiest to leave it open to set other addresses
+  102,
+  104
 };
 // BLUE:   SDA
 // GREEN:  SCA
@@ -33,7 +34,19 @@ uint8_t enPins[] = {
 
 
 void setup() {
+  // wiz reset + setup:
+  pinMode(9, OUTPUT);
+  digitalWrite(9, LOW);    // begin reset the WIZ820io
+  pinMode(10, OUTPUT);
+  digitalWrite(10, HIGH);  // de-select WIZ820io
+  pinMode(4, OUTPUT);
+  digitalWrite(4, HIGH);   // de-select the SD Card
+  digitalWrite(9, HIGH);   // end reset pulse
+  delay(100);
+
+  
   Serial.begin(115200);
+  Serial.print("\n\n");
   if (OSC_UDP) {
     initNetwork();
   }
@@ -45,35 +58,52 @@ void setup() {
   for (uint8_t i = 0; i < numLidar; i++) {
     pinMode(enPins[i], OUTPUT);
     digitalWrite(enPins[i], LOW);
+    delay(100);
   }
 
   // update to new addresses (must do each time since addresses reset on power cycle)
   for (uint8_t i = 0; i < numLidar; i++) {
-    uint8_t serialNum[2];
-    uint8_t newAddr[1];
+    unsigned char serialNum[2];
+    //byte serialNum0[1];
+    //byte serialNum1[1];
+    unsigned char newAddr[1];
+    unsigned char disableStatus[1];
     digitalWrite(enPins[i], HIGH);                    // enable this sensor
-    delay(25);                                        // device takes 22ms to do self test etc.
-    lidars[i].begin(0, true);                         // initialize
-    lidars[i].read(0x96, 2, serialNum, false, 0x62);  // get serial number
+    delay(50);                                        // device takes 22ms to do self test etc.
+    //lidars[i].reset(0x62);
+    delay(50);
+    lidars[i].begin(LIDAR_CONFIG, true, 0x62);       // initialize
+    lidars[i].read(0x96, 2, serialNum,false, 0x62);  // get serial number
+    Serial.print(serialNum[0], HEX);Serial.println(serialNum[1], HEX);
     lidars[i].write(0x18, serialNum[0], 0x62);        // write low byte of serial num back
     lidars[i].write(0x19, serialNum[1], 0x62);        // write high byte of serial num back
     lidars[i].write(0x1a, lidarAddr[i], 0x62);        // write new i2c address
     lidars[i].read(0x1a, 1, newAddr, false, 0x62);    // read back new address
+    
     if (newAddr[0] == lidarAddr[i]) {
-      Serial.printf("Success! New address: %i\n", newAddr[0]);
+      Serial.printf("Success! Written Address: %i, Read address: %i\n", lidarAddr[i], newAddr[0]);
+      delay(500);
       lidars[i].write(0x1e, 0x08, 0x62);                // disable default i2c address
+      //Serial.printf("Default Address Disabled\n");
+      delay(500);
+      lidars[i].read(0x1e, 1, disableStatus, false, lidarAddr[i]);
+      Serial.printf("Default address disable register: %i\n", disableStatus[0]);
     } else {
       Serial.printf("Error! Written address: %i, intended address: %i\n", newAddr[0], lidarAddr[i]);
-      while (0) {
+      while (1) {
         Serial.printf("FIX ME!\n");
-        delay(250);
+        delay(3000);
       }
     }
   }
+  delay(500);
 
   for (uint8_t i = 0; i < numLidar; i++) {
     lidars[i].configure(LIDAR_CONFIG, lidarAddr[i]);
   }
+
+  Serial.printf("READY");
+  delay(1000);
 }
 
 
@@ -82,15 +112,18 @@ void loop() {
 
   // measure distances! (receiver bias correction only every 100th measurement...)
   // (this allows higher speed (no correction), but still calibrates to changing conditions (temp, noise, ambient, etc)).
-  int lidarDist[numLidar];
+  float lidarDist[numLidar];
   for (uint8_t i = 0; i < numLidar; i++) {
     if (biasCounter % 100 == 0) {
-      lidarDist[i] = lidars[i].distance(true, lidarAddr[i]);
+      lidarDist[i] = (float)lidars[i].distance(true, lidarAddr[i]);
     }
     else {
-      lidarDist[i] = lidars[i].distance(false, lidarAddr[i]);
+      lidarDist[i] = (float)lidars[i].distance(false, lidarAddr[i]);
     }
-    if (DEBUG_LIDAR) Serial.printf("Lidar at %i:\t%i\t", lidarAddr[i], lidarDist[i]);
+    lidarDist[i] = map(lidarDist[i], 0, 300, 0, 100);
+    lidarDist[i]/=100.0f;
+    lidarDist[i] = constrain(lidarDist[i], 0.0f, 1.0f);
+    if (DEBUG_LIDAR) Serial.printf("Lidar at %i:\t%f\t", lidarAddr[i], lidarDist[i]);
   }
   if (DEBUG_LIDAR) Serial.println();
 
@@ -99,7 +132,7 @@ void loop() {
   for (uint8_t i = 0; i < numLidar; i++) {
     String  oscAddr =  "/lidar/";   oscAddr += i;
     OSCMessage m(oscAddr.c_str());
-    m.add((int32_t)lidarDist[i]);
+    m.add((float)lidarDist[i]);
 
     // send OSC message over serial: 
     if (OSC_UDP) {
