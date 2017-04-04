@@ -1,23 +1,24 @@
 #include "settings.h"
 
 //#include <Wire.h>
-#include <i2c_t3.h>
+//#include <i2c_t3.h>
 #include <LIDARLite.h>
 #include <OSCMessage.h>
 
-  #ifdef BOARD_HAS_USB_SERIAL
-    #include <SLIPEncodedUSBSerial.h>
-    SLIPEncodedUSBSerial SLIPSerial( thisBoardsSerialUSB );
-  #else
-    #include <SLIPEncodedSerial.h>
-    SLIPEncodedSerial SLIPSerial(Serial1);
-  #endif
+#ifdef BOARD_HAS_USB_SERIAL
+#include <SLIPEncodedUSBSerial.h>
+SLIPEncodedUSBSerial SLIPSerial( thisBoardsSerialUSB );
+#else
+#include <SLIPEncodedSerial.h>
+SLIPEncodedSerial SLIPSerial(Serial1);
+#endif
 
 const int numLidar = 2;
 unsigned long biasCounter = 0;
 
+float lidarDistAvg[numLidar];
 LIDARLite lidars[numLidar];
-unsigned char lidarAddr[] = {
+const unsigned char lidarAddr[] = {
   100,   // DO NOT USE 0x62 -> it is default and it's easiest to leave it open to set other addresses
   102,
   104
@@ -25,11 +26,14 @@ unsigned char lidarAddr[] = {
 // BLUE:   SDA
 // GREEN:  SCA
 // ORANGE: EN
-uint8_t enPins[] = {
-  20,
-  21,
-  22
+const uint8_t enPins[] = {
+  33,
+  34,
+  35
 };
+const uint8_t hardResetPin = 32;
+const uint8_t ethernetDisablePin = 31;
+boolean ethernetDisable = false;
 
 
 
@@ -44,9 +48,25 @@ void setup() {
   digitalWrite(9, HIGH);   // end reset pulse
   delay(100);
 
-  
   Serial.begin(115200);
-  Serial.print("\n\n");
+  delay(1000);
+  Serial.printf("\n\nLaser Instrument\nc.2017 Tangible Interaction Design Inc.\n");
+  Serial.printf("v%f-beta\n", FW_VERSION);
+
+  // only checks ethernet disable on startup:
+  pinMode(ethernetDisablePin, INPUT);
+  ethernetDisable = digitalRead(ethernetDisablePin);
+  if (ethernetDisable || DISABLE_ETHERNET) Serial.printf("Ethernet Disabled\n");
+  else Serial.printf("Ethernet Enabled\n");
+  
+  // power cycle the lidars (they are hanging the bus)
+  pinMode(hardResetPin, OUTPUT);
+  digitalWrite(hardResetPin, HIGH);
+  delay(1000);
+  digitalWrite(hardResetPin, LOW);
+  delay(200);
+  
+
   if (OSC_UDP) {
     initNetwork();
   }
@@ -60,28 +80,33 @@ void setup() {
     digitalWrite(enPins[i], LOW);
     delay(100);
   }
+  //  digitalWrite(enPins[2], LOW);                    // enable this sensor
+  //  delay(100);
 
   // update to new addresses (must do each time since addresses reset on power cycle)
   for (uint8_t i = 0; i < numLidar; i++) {
     unsigned char serialNum[2];
-    //byte serialNum0[1];
-    //byte serialNum1[1];
     unsigned char newAddr[1];
     unsigned char disableStatus[1];
     digitalWrite(enPins[i], HIGH);                    // enable this sensor
     delay(50);                                        // device takes 22ms to do self test etc.
     //lidars[i].reset(0x62);
     delay(50);
+    
+    Serial.printf("Configuring lidar %i...", i);
     lidars[i].begin(LIDAR_CONFIG, true, 0x62);       // initialize
-    lidars[i].read(0x96, 2, serialNum,false, 0x62);  // get serial number
-    Serial.print(serialNum[0], HEX);Serial.println(serialNum[1], HEX);
+    Serial.printf("done.\n Getting serial number: ");
+    lidars[i].read(0x96, 2, serialNum, false, 0x62); // get serial number
+    Serial.print(serialNum[0], HEX); Serial.println(serialNum[1], HEX);
+    Serial.printf("Writing serial back to 0x18 & 0x19...");
     lidars[i].write(0x18, serialNum[0], 0x62);        // write low byte of serial num back
     lidars[i].write(0x19, serialNum[1], 0x62);        // write high byte of serial num back
+    Serial.printf("done.\n Writing new address...");
     lidars[i].write(0x1a, lidarAddr[i], 0x62);        // write new i2c address
     lidars[i].read(0x1a, 1, newAddr, false, 0x62);    // read back new address
-    
+
     if (newAddr[0] == lidarAddr[i]) {
-      Serial.printf("Success! Written Address: %i, Read address: %i\n", lidarAddr[i], newAddr[0]);
+      Serial.printf("Success!\nWritten Address: %i, Read address: %i\n", lidarAddr[i], newAddr[0]);
       delay(500);
       lidars[i].write(0x1e, 0x08, 0x62);                // disable default i2c address
       //Serial.printf("Default Address Disabled\n");
@@ -95,6 +120,8 @@ void setup() {
         delay(3000);
       }
     }
+    //    digitalWrite(enPins[i], LOW);                    // disable this sensor
+    //    delay(100);
   }
   delay(500);
 
@@ -102,8 +129,8 @@ void setup() {
     lidars[i].configure(LIDAR_CONFIG, lidarAddr[i]);
   }
 
-  Serial.printf("READY");
-  delay(1000);
+  Serial.printf("READY\n");
+  delay(3000);
 }
 
 
@@ -120,10 +147,11 @@ void loop() {
     else {
       lidarDist[i] = (float)lidars[i].distance(false, lidarAddr[i]);
     }
-    lidarDist[i] = map(lidarDist[i], 0, 300, 0, 100);
-    lidarDist[i]/=100.0f;
+    lidarDist[i] = map(lidarDist[i], 0, MAX_HEIGHT, 100, 0);
+    lidarDist[i] /= 100.0f;
     lidarDist[i] = constrain(lidarDist[i], 0.0f, 1.0f);
-    if (DEBUG_LIDAR) Serial.printf("Lidar at %i:\t%f\t", lidarAddr[i], lidarDist[i]);
+    lidarDistAvg[i] = SMOOTH * lidarDist[i] + (1.0 - SMOOTH) * lidarDistAvg[i];
+    if (DEBUG_LIDAR) Serial.printf("Lidar at %i:\t%f\t", lidarAddr[i], lidarDistAvg[i]);
   }
   if (DEBUG_LIDAR) Serial.println();
 
@@ -132,18 +160,20 @@ void loop() {
   for (uint8_t i = 0; i < numLidar; i++) {
     String  oscAddr =  "/lidar/";   oscAddr += i;
     OSCMessage m(oscAddr.c_str());
-    m.add((float)lidarDist[i]);
+    m.add((float)lidarDistAvg[i]);
 
-    // send OSC message over serial: 
+    // send OSC message over serial:
     if (OSC_UDP) {
-      udp.beginPacket(destIP, destPort);
+      if (!DISABLE_ETHERNET && !ethernetDisable) {
+        udp.beginPacket(destIP, destPort);
         m.send(udp);
-      udp.endPacket();
-      Ethernet.maintain();    // request new DHCP lease if needed (otherwise this may continue to use IP with expired lease) 
+        udp.endPacket();
+        Ethernet.maintain();    // request new DHCP lease if needed (otherwise this may continue to use IP with expired lease)
+      }
     }
     else {
       SLIPSerial.beginPacket();
-        m.send(SLIPSerial);
+      m.send(SLIPSerial);
       SLIPSerial.endPacket();
     }
     m.empty();

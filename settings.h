@@ -16,8 +16,17 @@
 
 
 
+#define FW_VERSION 0.5f  // firmware version
+
+
+
+
+
 /* Network setting */
-#define OSC_UDP true   // if false, uses SLIPSerial
+#define DISABLE_ETHERNET false  // this overrides everything! including the ethernet switch
+#define OSC_UDP true            // if false, uses SLIPSerial
+#define SMOOTH 0.1f             // between 0.0 and 1.0 --> closer to 0 is more smoothing. 
+#define MAX_HEIGHT 150          // in cm
 
 #include <Ethernet.h>
 #include <EthernetUdp.h>
@@ -27,8 +36,8 @@ EthernetUDP udp;
 byte mac[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0xFE, 0xED };
 IPAddress myIP(10,0,1,225);
 //IPAddress destAddress(10,0,2,128);
-IPAddress destIP(10,0,1,200);
-const uint16_t destPort = 9003;
+IPAddress destIP(10,0,1,29);
+const uint16_t destPort = 1234;
 
 enum ConnectMode {
   AUTO,

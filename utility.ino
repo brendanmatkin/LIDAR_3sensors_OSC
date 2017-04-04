@@ -27,4 +27,6 @@ void initNetwork() {
   Serial.print("Destination Port:\t");
   if (udp.begin(destPort)) Serial.println(destPort);
   else Serial.printf("%i not available\n", destPort);
+
+  Serial.printf("Network Setup Complete\n");
 }
