@@ -147,7 +147,10 @@ void loop() {
     else {
       lidarDist[i] = (float)lidars[i].distance(false, lidarAddr[i]);
     }
-    lidarDist[i] = map(lidarDist[i], 0, MAX_HEIGHT, 100, 0);
+    int maxDist;
+    if (i == 0) maxDist = MAX_DIST_0;
+    if (i == 1) maxDist = MAX_DIST_1;
+    lidarDist[i] = map(lidarDist[i], 0, maxDist, 100, 0);
     lidarDist[i] /= 100.0f;
     lidarDist[i] = constrain(lidarDist[i], 0.0f, 1.0f);
     lidarDistAvg[i] = SMOOTH * lidarDist[i] + (1.0 - SMOOTH) * lidarDistAvg[i];
